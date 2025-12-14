@@ -1,57 +1,39 @@
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 from main import app
-
+from model import ModelError
 
 client = TestClient(app)
 
+def test_process_prompt_success():
+    test_text = "test text"
+    fake_predictions = [
+        {"label": "positive", "probability": 0.95},
+        {"label": "negative", "probability": 0.05},
+    ]
 
-def test_process_success(monkeypatch):
-    """
-    Успешный ответ от LLM 200
-    """
+    with patch("main.get_from_cache", return_value=None), \
+         patch("main.response_from_model", return_value=fake_predictions), \
+         patch("main.set_to_cache"):
 
-    # fake LLM
-    def fake_llm(prompt: str) -> str:
-        return "mocked llm response"
+        response = client.post("/process", json={"text": test_text})
+        assert response.status_code == 200
 
-    monkeypatch.setattr(
-        "main.response_from_llm",
-        fake_llm
-    )
-
-    response = client.post(
-        "/process",
-        json={"text": "hello"}
-    )
-
-    assert response.status_code == 200
-
-    data = response.json()
-    assert "result" in data
-    assert isinstance(data["result"], str)
+        data = response.json()
+        assert data["text"] == test_text
+        assert data["predictions"] == fake_predictions
+        assert data["model"] == "tabularisai/multilingual-sentiment-analysis"
+        assert data["cached"] is False
 
 
-def test_process_llm_error(monkeypatch):
-    """
-    Ошибка LLM 502
-    """
+def test_process_prompt_model_error():
+    test_text = "error text"
 
-    def fake_llm(prompt: str):
-        raise Exception("LLM failed")
+    with patch("main.get_from_cache", return_value=None), \
+         patch("main.response_from_model", side_effect=ModelError("Model failed")):
 
-    monkeypatch.setattr(
-        "main.response_from_llm",
-        fake_llm
-    )
-
-    response = client.post(
-        "/process",
-        json={"text": "hello"}
-    )
-
-    assert response.status_code == 502
-
-    data = response.json()
-    assert "detail" in data
+        response = client.post("/process", json={"text": test_text})
+        assert response.status_code == 502
+        assert response.json()["detail"] == "Model service unavailable"

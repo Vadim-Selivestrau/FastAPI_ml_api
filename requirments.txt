@@ -5,5 +5,5 @@ pydantic
 pytest
 requests
 redis
-google
-google-genai
+streamlit
+huggingface_hub

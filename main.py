@@ -1,36 +1,69 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from llm import response_from_llm, LLMError
+from pydantic import BaseModel, Field
+from model import response_from_model, ModelError, Model
+from typing import List
+
 from cache import get_from_cache, set_to_cache
 from loger import logger
 
 app = FastAPI()
 
+class UserText(BaseModel):
+    text: str = Field(..., description="User input text")
 
-class PromptIn(BaseModel):
+class Prediction(BaseModel):
+    label: str = Field(..., description="Class label")
+    probability: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Class probability",
+    )
+
+class ClassificationResponse(BaseModel):
     text: str
+    predictions: List[Prediction]
+    model: str
+    cached: bool
 
 
-class PromptOut(BaseModel):
-    result: str
 
+@app.post("/process", response_model=ClassificationResponse)
+async def process_prompt(payload: UserText):
+    logger.info("⬇ Incoming request")
 
-@app.post("/process", response_model=PromptOut)
-async def process_prompt(payload: PromptIn):
+    text = payload.text
+
     try:
-        user_request = payload.text
-        logger.info("⬇Incoming request")
+        cached_result = get_from_cache(text)
 
-        user_result = get_from_cache(user_request)
-        if user_result is None:
-            llm_result = response_from_llm(user_request)
-            set_to_cache(user_request, llm_result)
-            return PromptOut(result=llm_result)
+        if cached_result is None:
+            logger.info("Cache miss")
+            predictions = response_from_model(text)
+            set_to_cache(text, predictions)
+            cached = False
         else:
-            return PromptOut(result = user_result)
+            logger.info("Cache hit")
+            predictions = cached_result
+            cached = True
 
-    except LLMError:
+        return ClassificationResponse(
+            text=text,
+            predictions=predictions,
+            model=Model,
+            cached=cached,
+        )
+
+    except ModelError as e:
+        logger.error("Model error: %s", str(e))
         raise HTTPException(
             status_code=502,
-            detail=HTTPException
+            detail="Model service unavailable",
+        )
+
+    except Exception:
+        logger.exception("Unexpected server error")
+        raise HTTPException(
+            status_code=501,
+            detail="Internal server error",
         )
